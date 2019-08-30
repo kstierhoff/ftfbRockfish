@@ -1,0 +1,86 @@
+---
+title: "43 Fathom Bank ROV Data Exploration"
+author: "Kevin L. Stierhoff"
+date: "8/30/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# Install and load pacman (library management package)
+if (!require("pacman")) install.packages("pacman")
+
+# Install and load required packages from CRAN ---------------------------------
+pacman::p_load(tidyverse,lubridate,knitr,cowplot,
+               here,leaflet,leafem,htmltools,
+               mapview,fs,DT,xml2,DBI,odbc,bookdown,sf)
+
+knitr::opts_chunk$set(echo = TRUE)
+
+theme_set(theme_bw())
+
+# Controls
+get.db <- T
+```
+
+```{r load-data}
+old.nav <- read_csv(here("Data/43FB_nav_seabed_20130122.csv"))
+old.obs <- read_csv(here("Data/all_obs_FTFB.csv"))
+```
+
+```{r extract-database}
+if (get.db) {
+  # Set up database connection
+  con  <- dbConnect(odbc::odbc(), 
+                    Driver = "SQL Server", 
+                    Server = "161.55.235.187", 
+                    Database = "ROV2", 
+                    Trusted_Connection = "True")
+
+  # Create pointers
+  logs <- tbl(con, "tbl_LOGS") %>%
+    mutate(year = year(dive_date)) %>% 
+    filter(site_general == "43 Fathom Bank",
+           between(year, 2004, 2013)) 
+  
+  # Get nav data
+  nav <- tbl(con, "tbl_NAV") %>% 
+    left_join(select(logs, dive_name, site_general)) %>% 
+    filter(!is.na(site_general)) %>% 
+    collect()
+
+  obs <- tbl(con, "tbl_VIDEO_OBS") %>% 
+    left_join(select(logs, dive_name, site_general)) %>% 
+    filter(!is.na(site_general)) %>% 
+    collect()
+  
+  spp <- tbl(con, "tlu_SPECIES_CODES") %>% 
+    collect()
+  
+  # Close connection
+  dbDisconnect(con)
+  
+  save(nav, obs, spp,
+       file = here("Data/rov_data.Rdata"))
+} else {
+  load(here("Data/rov_data.Rdata"))
+}
+
+# Format data
+nav <- nav %>% 
+  filter(nav_id %in% old.nav$nav_id) %>% 
+  rename(long = long_r, lat = lat_r) %>% 
+  arrange(date_time)
+
+obs <- obs %>% 
+  left_join(select(nav, nav_id, long, lat)) %>% 
+  left_join(select(spp, species_code, sci_name_full, common_name))
+```
+
+```{r}
+ggplot(old.nav, aes(lon_dd_r, lat_dd_r, group = dive_name)) + 
+  geom_path(aes(colour = geol_prim)) +
+  geom_point(data = old.obs, aes(lon_dd_r, lat_dd_r, colour = geol_prim)) +
+  coord_map()
+
+```
+
