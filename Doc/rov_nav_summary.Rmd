@@ -1,7 +1,7 @@
 ---
-title: "43 Fathom Bank ROV Data Exploration"
+title: "Cowcod and Bocaccio Navigaion Summary"
 author: "Kevin L. Stierhoff"
-date: "8/30/2019"
+date: "2/5/2020"
 output: html_document
 ---
 
@@ -19,37 +19,38 @@ knitr::opts_chunk$set(echo = TRUE)
 theme_set(theme_bw())
 
 # Controls
-get.db <- F
-```
-
-```{r load-data}
-old.nav <- read_csv(here("Data/43FB_nav_seabed_20130122.csv"))
-old.obs <- read_csv(here("Data/all_obs_FTFB.csv"))
+get.db <- T
 ```
 
 ```{r extract-database}
+# Read dives of interest
+dive_list <- read_csv(here("Data/tbl_Elan_dives.csv")) %>% 
+  pull()
+
 if (get.db) {
   # Set up database connection
   con  <- dbConnect(odbc::odbc(), 
                     Driver = "SQL Server", 
                     Server = "161.55.235.187", 
                     Database = "ROV2", 
+                    timeout = 10,
                     Trusted_Connection = "True")
 
   # Create pointers
   logs <- tbl(con, "tbl_LOGS") %>%
-    mutate(year = year(dive_date)) %>% 
-    filter(site_general == "43 Fathom Bank",
-           between(year, 2004, 2013)) 
-  
+    select(-comments) %>%
+    collect() %>% 
+    filter(dive_name %in% dive_list)
+
   # Get nav data
   nav <- tbl(con, "tbl_NAV") %>% 
-    left_join(select(logs, dive_name, site_general)) %>% 
+    left_join(select(logs, dive_name, site_general), copy = TRUE) %>% 
     filter(!is.na(site_general)) %>% 
     collect()
 
   obs <- tbl(con, "tbl_VIDEO_OBS") %>% 
-    left_join(select(logs, dive_name, site_general)) %>% 
+    select(-comments) %>% 
+    left_join(select(logs, dive_name, site_general), copy = TRUE) %>% 
     filter(!is.na(site_general)) %>% 
     collect()
   
@@ -59,28 +60,31 @@ if (get.db) {
   # Close connection
   dbDisconnect(con)
   
-  save(nav, obs, spp,
-       file = here("Data/rov_data.Rdata"))
+  save(logs, nav, obs, spp,
+       file = here("Data/rov_data_elan.Rdata"))
 } else {
-  load(here("Data/rov_data.Rdata"))
+  load(here("Data/rov_data_elan.Rdata"))
 }
-
-# Format data
-nav <- nav %>% 
-  filter(nav_id %in% old.nav$nav_id) %>% 
-  rename(long = long_r, lat = lat_r) %>% 
-  arrange(date_time)
-
-obs <- obs %>% 
-  left_join(select(nav, nav_id, long, lat)) %>% 
-  left_join(select(spp, species_code, sci_name_full, common_name))
 ```
 
 ```{r}
-ggplot(old.nav, aes(lon_dd_r, lat_dd_r, group = dive_name)) + 
-  geom_path(aes(colour = geol_prim)) +
-  geom_point(data = old.obs, aes(lon_dd_r, lat_dd_r, colour = geol_prim)) +
-  coord_map()
+nav.depth.summ <- nav %>% 
+  filter(depth != -999) %>% 
+  mutate(depth.bin = cut(depth, seq(-600, 0, 2))) %>% 
+  group_by(dive_name, depth.bin) %>%
+  summarise(distance = round(sum(disp_r)),
+            duration = round(as.numeric(sum(xts::diff.xts(date_time), na.rm = TRUE))/60))
 
+nav.depth.summ2 <- nav.depth.summ %>% 
+  summarise(distance = sum(distance),
+            duration = sum(duration))
+
+
+write_csv(nav.depth.summ, here("Output/nav_depth_summary_bin.csv"))
+write_csv(nav.depth.summ2, here("Output/nav_depth_summary_dive.csv"))
+
+hist(nav.depth.summ2$distance)
+hist(nav.depth.summ2$duration)
 ```
 
+s
